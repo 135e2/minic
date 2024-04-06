@@ -7,6 +7,7 @@
 
 #include <clang/AST/ASTConsumer.h>
 #include <clang/AST/Decl.h>
+#include <clang/AST/DeclCXX.h>
 #include <clang/AST/RecursiveASTVisitor.h>
 #include <clang/Basic/FileManager.h>
 #include <clang/Basic/LangOptions.h>
@@ -31,6 +32,7 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include <err.h>
+// #include <iostream>
 #include <memory>
 #include <unistd.h>
 #include <vector>
@@ -79,6 +81,7 @@ struct Collector : RecursiveASTVisitor<Collector> {
   SourceManager &sm;
 
   Collector(ASTContext &ctx) : sm(ctx.getSourceManager()) {}
+
   bool VisitFunctionDecl(FunctionDecl *fd) {
     if (fd->isOverloadedOperator() || !fd->getIdentifier())
       return true;
@@ -105,7 +108,13 @@ struct Collector : RecursiveASTVisitor<Collector> {
     d2name[vd->getCanonicalDecl()] = "_v";
     return true;
   }
-
+  bool VisitFieldDecl(FieldDecl *fd) {
+    used.insert(CachedHashStringRef(fd->getName()));
+    if (!sm.isWrittenInMainFile(fd->getLocation()))
+      return true;
+    d2name[fd->getCanonicalDecl()] = "_fld";
+    return true;
+  }
   bool VisitTagDecl(TagDecl *td) {
     used.insert(CachedHashStringRef(td->getName()));
     if (!td->isThisDeclarationADefinition() ||
@@ -139,6 +148,43 @@ struct Renamer : RecursiveASTVisitor<Renamer> {
       replace(CharSourceRange::getTokenRange(fd->getLocation()), it->second);
     return true;
   }
+  // CXXConstructorDecl is a special kind of FunctionDecl/CXXMethodDecl that
+  // needs to be renamed to its parent class
+  bool VisitCXXConstructorDecl(CXXConstructorDecl *ccd) {
+    // the canon decl should be the same as its class's (in other words,
+    // its parent's)
+    auto *canon = ccd->getParent()->getCanonicalDecl();
+    auto it = d2name.find(canon);
+    if (it != d2name.end()) {
+      replace(CharSourceRange::getTokenRange(ccd->getLocation()), it->second);
+      for (CXXCtorInitializer *cci : ccd->inits())
+        VisitCXXCtorInitializer(cci);
+      for (ParmVarDecl *param : ccd->parameters())
+        VisitVarDecl(param);
+    }
+    return true;
+  }
+  // And constructor leads to another oddity: C++ base/member initializer
+  bool VisitCXXCtorInitializer(CXXCtorInitializer *cci) {
+    auto *canon = cci->getMember()->getCanonicalDecl();
+    auto it = d2name.find(canon);
+    if (it != d2name.end())
+      replace(CharSourceRange::getTokenRange(cci->getSourceLocation()),
+              it->second);
+    return true;
+  }
+  bool VisitMemberExpr(MemberExpr *me) {
+    DeclarationNameInfo ni = me->getMemberNameInfo();
+    std::string name = ni.getAsString();
+    if (sm.isWrittenInMainFile(me->getMemberLoc())) {
+      auto *canon = me->getMemberDecl()->getCanonicalDecl();
+      auto it = d2name.find(canon);
+      if (it != d2name.end()) {
+        replace(CharSourceRange::getTokenRange(me->getMemberLoc()), it->second);
+      }
+    }
+    return true;
+  }
   bool VisitVarDecl(VarDecl *vd) {
     auto *canon = vd->getCanonicalDecl();
     auto it = d2name.find(canon);
@@ -157,7 +203,13 @@ struct Renamer : RecursiveASTVisitor<Renamer> {
               it->second);
     return true;
   }
-
+  bool VisitFieldDecl(FieldDecl *fd) {
+    auto *canon = fd->getCanonicalDecl();
+    auto it = d2name.find(canon);
+    if (it != d2name.end())
+      replace(CharSourceRange::getTokenRange(fd->getLocation()), it->second);
+    return true;
+  }
   bool VisitTagDecl(TagDecl *d) {
     auto *canon = d->getCanonicalDecl();
     if (d->getTypedefNameForAnonDecl())
@@ -189,7 +241,7 @@ struct Renamer : RecursiveASTVisitor<Renamer> {
 
 struct MiniASTConsumer : ASTConsumer {
   ASTContext *ctx;
-  int n_fn = 0, n_var = 0, n_type = 0;
+  int n_fn = 0, n_var = 0, n_type = 0, n_fld = 0;
 
   void Initialize(ASTContext &ctx) override { this->ctx = &ctx; }
   static std::string getName(StringRef prefix, int &id) {
@@ -212,11 +264,14 @@ struct MiniASTConsumer : ASTConsumer {
       used.insert(CachedHashStringRef(s));
     for (auto s : {"y0", "y1", "yn", "y0f", "y1f", "ynf", "y0l", "y1l", "ynl"})
       used.insert(CachedHashStringRef(s));
-
-    Collector c(*ctx);
-    for (Decl *d : dgr)
-      c.TraverseDecl(d);
+    return true;
+  }
+  void HandleTranslationUnit(ASTContext &ctx) override {
+    Collector c(ctx);
+    c.TraverseDecl(ctx.getTranslationUnitDecl());
     for (auto &[d, name] : d2name) {
+      // std::cout << "type: " << d->getDeclKindName() << ", name: " << name <<
+      // std::endl;
       if (name == "_f")
         name = getName("abcdefghijklm", n_fn);
       else if (name == "_v") {
@@ -228,15 +283,14 @@ struct MiniASTConsumer : ASTConsumer {
           name = static_cast<VarDecl *>(d)->getName();
           n_var = old_n_var;
         }
-      } else if (name == "_t")
-        name = getName("ABCDEFGHIJKLMNOPQRSTUVWXYZ", n_type);
+      } else if (name == "_t") {
+        name = getName("ABCDEFGHIJKLM", n_type);
+      } else if (name == "_fld")
+        name = getName("NOPQRSTUVWXYZ", n_fld);
     }
-    return true;
-  }
-  void HandleTranslationUnit(ASTContext &ctx) override {
     tooling::Replacements reps;
-    Renamer c(ctx, reps);
-    c.TraverseDecl(ctx.getTranslationUnitDecl());
+    Renamer r(ctx, reps);
+    r.TraverseDecl(ctx.getTranslationUnitDecl());
 
     auto &sm = ctx.getSourceManager();
     StringRef code = sm.getBufferData(sm.getMainFileID());
