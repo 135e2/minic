@@ -29,11 +29,14 @@ static void removeComments(std::string &input) {
 
   m = 0, n = 0;
 
+  // ensure a newline to the end of the file to handle comments in the last line
+  input.push_back('\n');
   while ((m = input.find("//", n)) != std::string::npos) {
     if ((n = input.find("\n", m)) == std::string::npos)
       errx(2, "failed to parse comments");
     input.replace(m, n - m, "");
   }
+  input.pop_back();
 }
 
 static void minifyOps(std::string &input) {
@@ -74,8 +77,10 @@ static void stripNewLine(std::string &input) {
       continue;
     }
     if (line.front() == '#') {
-      // Keep preprocessor's '\n'
-      result += line + '\n';
+      // Keep preprocessor's '\n', honoring the line above
+      result +=
+          ((!result.empty() && result.back() != '\n') ? '\n' + line : line) +
+          '\n';
       continue;
     }
     if (lastLineIsMacro) {
