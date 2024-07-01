@@ -9,6 +9,8 @@
 #include <clang/AST/Decl.h>
 #include <clang/AST/DeclCXX.h>
 #include <clang/AST/RecursiveASTVisitor.h>
+#include <clang/AST/Type.h>
+#include <clang/AST/TypeLoc.h>
 #include <clang/Basic/FileManager.h>
 #include <clang/Basic/LangOptions.h>
 #include <clang/Basic/SourceManager.h>
@@ -32,7 +34,6 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include <err.h>
-// #include <iostream>
 #include <memory>
 #include <unistd.h>
 #include <vector>
@@ -41,6 +42,16 @@
 
 using namespace clang;
 using namespace llvm;
+
+typedef struct {
+  std::string name;
+  size_t type_hash;
+} DeclMapData;
+
+SmallVector<StringRef, 0> ignores;
+MapVector<Decl *, DeclMapData> d2name;
+DenseSet<CachedHashStringRef> used;
+std::string newCode;
 
 namespace {
 std::unique_ptr<CompilerInvocation>
@@ -72,11 +83,6 @@ buildCompilerInvocation(ArrayRef<const char *> args) {
   return ci;
 }
 
-SmallVector<StringRef, 0> ignores;
-MapVector<Decl *, std::string> d2name;
-DenseSet<CachedHashStringRef> used;
-std::string newCode;
-
 struct Collector : RecursiveASTVisitor<Collector> {
   SourceManager &sm;
 
@@ -91,7 +97,13 @@ struct Collector : RecursiveASTVisitor<Collector> {
     std::string name = fd->getNameAsString();
     if (sm.isWrittenInMainFile(fd->getLocation())) {
       if (!is_contained(ignores, name))
-        d2name[fd->getCanonicalDecl()] = "_f";
+#ifndef NDEBUG
+
+        outs() << "in VisitFunctionDecl, typeid: "
+               << typeid(fd->getCanonicalDecl()).name() << "\n",
+#endif
+            d2name[fd->getCanonicalDecl()].type_hash =
+                typeid(fd->getCanonicalDecl()).hash_code();
       for (ParmVarDecl *param : fd->parameters())
         VisitVarDecl(param);
     }
@@ -105,30 +117,39 @@ struct Collector : RecursiveASTVisitor<Collector> {
     if (kind != VarDecl::Definition ||
         !sm.isWrittenInMainFile(vd->getLocation()))
       return true;
-    d2name[vd->getCanonicalDecl()] = "_v";
+#ifndef NDEBUG
+    outs() << "in VisitVarDecl, typeid: "
+           << typeid(vd->getCanonicalDecl()).name() << "\n",
+#endif
+        d2name[vd->getCanonicalDecl()].type_hash =
+            typeid(vd->getCanonicalDecl()).hash_code();
     return true;
   }
   bool VisitFieldDecl(FieldDecl *fd) {
     used.insert(CachedHashStringRef(fd->getName()));
     if (!sm.isWrittenInMainFile(fd->getLocation()))
       return true;
-    d2name[fd->getCanonicalDecl()] = "_fld";
+#ifndef NDEBUG
+    outs() << "in VisitFieldDecl, typeid: "
+           << typeid(fd->getCanonicalDecl()).name() << "\n",
+#endif
+        d2name[fd->getCanonicalDecl()].type_hash =
+            typeid(fd->getCanonicalDecl()).hash_code();
     return true;
   }
-  bool VisitTagDecl(TagDecl *td) {
+  bool VisitTypeDecl(TypeDecl *td) {
     used.insert(CachedHashStringRef(td->getName()));
-    if (!td->isThisDeclarationADefinition() ||
-        !sm.isWrittenInMainFile(td->getLocation()))
+    if (!sm.isWrittenInMainFile(td->getLocation()))
       return true;
-    d2name[td->getCanonicalDecl()] = "_t";
+#ifndef NDEBUG
+    outs() << "in VisitTypeDecl, typeid: " << typeid(td).name() << "\n",
+#endif
+        // TypeDecl does not have its own getCanonicalDecl method, so calling
+        // td->getCanonicalDecl() would get its base class (Decl *)this and is
+        // certainly of no use.
+        d2name[td->getCanonicalDecl()].type_hash = typeid(td).hash_code();
     return true;
-  }
-  bool VisitTypedefNameDecl(TypedefNameDecl *d) {
-    if (d->isTransparentTag() || !sm.isWrittenInMainFile(d->getLocation()))
-      return true;
-    d2name[d->getCanonicalDecl()] = "_t";
-    return true;
-  }
+  };
 };
 
 struct Renamer : RecursiveASTVisitor<Renamer> {
@@ -145,7 +166,8 @@ struct Renamer : RecursiveASTVisitor<Renamer> {
     auto *canon = fd->getCanonicalDecl();
     auto it = d2name.find(canon);
     if (it != d2name.end())
-      replace(CharSourceRange::getTokenRange(fd->getLocation()), it->second);
+      replace(CharSourceRange::getTokenRange(fd->getLocation()),
+              it->second.name);
     return true;
   }
   // CXXConstructorDecl is a special kind of FunctionDecl/CXXMethodDecl that
@@ -156,7 +178,8 @@ struct Renamer : RecursiveASTVisitor<Renamer> {
     auto *canon = ccd->getParent()->getCanonicalDecl();
     auto it = d2name.find(canon);
     if (it != d2name.end()) {
-      replace(CharSourceRange::getTokenRange(ccd->getLocation()), it->second);
+      replace(CharSourceRange::getTokenRange(ccd->getLocation()),
+              it->second.name);
       for (CXXCtorInitializer *cci : ccd->inits())
         VisitCXXCtorInitializer(cci);
       for (ParmVarDecl *param : ccd->parameters())
@@ -170,7 +193,7 @@ struct Renamer : RecursiveASTVisitor<Renamer> {
     auto it = d2name.find(canon);
     if (it != d2name.end())
       replace(CharSourceRange::getTokenRange(cci->getSourceLocation()),
-              it->second);
+              it->second.name);
     return true;
   }
   bool VisitMemberExpr(MemberExpr *me) {
@@ -180,7 +203,8 @@ struct Renamer : RecursiveASTVisitor<Renamer> {
       auto *canon = me->getMemberDecl()->getCanonicalDecl();
       auto it = d2name.find(canon);
       if (it != d2name.end()) {
-        replace(CharSourceRange::getTokenRange(me->getMemberLoc()), it->second);
+        replace(CharSourceRange::getTokenRange(me->getMemberLoc()),
+                it->second.name);
       }
     }
     return true;
@@ -189,65 +213,64 @@ struct Renamer : RecursiveASTVisitor<Renamer> {
     auto *canon = vd->getCanonicalDecl();
     auto it = d2name.find(canon);
     if (it != d2name.end())
-      replace(CharSourceRange::getTokenRange(vd->getLocation()), it->second);
+      replace(CharSourceRange::getTokenRange(vd->getLocation()),
+              it->second.name);
     return true;
   }
   bool VisitDeclRefExpr(DeclRefExpr *dre) {
     Decl *d = dre->getDecl();
-    if (!(isa<FunctionDecl>(d) || isa<VarDecl>(d)))
+    if (!(isa<FunctionDecl>(d) || isa<VarDecl>(d) || isa<FieldDecl>(d) ||
+          isa<TypeDecl>(d))) {
       return true;
+    }
     auto it = d2name.find(d->getCanonicalDecl());
     if (it != d2name.end())
-      replace(CharSourceRange::getTokenRange(
-                  SourceRange(dre->getBeginLoc(), dre->getEndLoc())),
-              it->second);
+      replace(
+          CharSourceRange::getTokenRange(SourceRange(dre->getSourceRange())),
+          it->second.name);
     return true;
   }
   bool VisitFieldDecl(FieldDecl *fd) {
     auto *canon = fd->getCanonicalDecl();
     auto it = d2name.find(canon);
     if (it != d2name.end())
-      replace(CharSourceRange::getTokenRange(fd->getLocation()), it->second);
+      replace(CharSourceRange::getTokenRange(fd->getLocation()),
+              it->second.name);
     return true;
   }
-  bool VisitTagDecl(TagDecl *d) {
+  bool VisitTypeDecl(TypeDecl *d) {
     auto *canon = d->getCanonicalDecl();
-    if (d->getTypedefNameForAnonDecl())
-      return true;
     if (auto it = d2name.find(canon); it != d2name.end())
-      replace(CharSourceRange::getTokenRange(d->getLocation()), it->second);
+      replace(CharSourceRange::getTokenRange(d->getLocation()),
+              it->second.name);
     return true;
   }
-  bool VisitTagTypeLoc(TagTypeLoc tl) {
-    TagDecl *td = tl.getDecl()->getCanonicalDecl();
-    if (td->getTypedefNameForAnonDecl())
-      return true;
+  bool VisitTypeLoc(TypeLoc tl) {
+    TypeDecl *td = nullptr;
+    if (const TagTypeLoc ttl = tl.getAs<TagTypeLoc>())
+      td = ttl.getDecl()->getCanonicalDecl();
+    if (const TypedefTypeLoc tdl = tl.getAs<TypedefTypeLoc>())
+      td = tdl.getTypedefNameDecl()->getCanonicalDecl();
+    if (const TemplateTypeParmTypeLoc ttptl =
+            tl.getAs<TemplateTypeParmTypeLoc>())
+      td = ttptl.getDecl();
     if (auto it = d2name.find(td); it != d2name.end())
-      replace(CharSourceRange::getTokenRange(tl.getNameLoc()), it->second);
-    return true;
-  }
-  bool VisitTypedefNameDecl(TypedefNameDecl *d) {
-    if (auto it = d2name.find(d->getCanonicalDecl()); it != d2name.end())
-      replace(CharSourceRange::getTokenRange(d->getLocation()), it->second);
-    return true;
-  }
-  bool VisitTypedefTypeLoc(TypedefTypeLoc tl) {
-    TypedefNameDecl *td = tl.getTypedefNameDecl();
-    if (auto it = d2name.find(td); it != d2name.end())
-      replace(CharSourceRange::getTokenRange(tl.getNameLoc()), it->second);
+      replace(CharSourceRange::getTokenRange(tl.getSourceRange()),
+              it->second.name);
     return true;
   }
 };
 
 struct MiniASTConsumer : ASTConsumer {
   ASTContext *ctx;
-  int n_fn = 0, n_var = 0, n_type = 0, n_fld = 0;
+  int n_fn = 0, n_var = 0, n_fld = 0, n_type = 0;
 
   void Initialize(ASTContext &ctx) override { this->ctx = &ctx; }
-  static std::string getName(StringRef prefix, int &id) {
+  static std::string getName(StringRef origName, StringRef prefix, int &id) {
     static const char digits[] =
         "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
     std::string newName;
+    int old_n = id;
     for (;;) {
       newName = std::string(1, prefix[id % prefix.size()]);
       if (int i = id / prefix.size())
@@ -256,6 +279,10 @@ struct MiniASTConsumer : ASTConsumer {
       id++;
       if (!used.contains(CachedHashStringRef(newName)))
         break;
+    }
+    if (newName.size() >= origName.size()) {
+      newName = origName;
+      id = old_n;
     }
     return newName;
   }
@@ -269,24 +296,24 @@ struct MiniASTConsumer : ASTConsumer {
   void HandleTranslationUnit(ASTContext &ctx) override {
     Collector c(ctx);
     c.TraverseDecl(ctx.getTranslationUnitDecl());
-    for (auto &[d, name] : d2name) {
-      // std::cout << "type: " << d->getDeclKindName() << ", name: " << name <<
-      // std::endl;
-      if (name == "_f")
-        name = getName("abcdefghijklm", n_fn);
-      else if (name == "_v") {
-        int old_n_var = n_var;
-        auto newName = getName("nopqrstuvwxyz", n_var);
-        if (newName.size() < static_cast<VarDecl *>(d)->getName().size())
-          name = newName;
-        else {
-          name = static_cast<VarDecl *>(d)->getName();
-          n_var = old_n_var;
-        }
-      } else if (name == "_t") {
-        name = getName("ABCDEFGHIJKLM", n_type);
-      } else if (name == "_fld")
-        name = getName("NOPQRSTUVWXYZ", n_fld);
+    for (auto &[d, v] : d2name) {
+      std::string vName =
+          dynamic_cast<NamedDecl *>(d)->getDeclName().getAsString();
+#ifndef NDEBUG
+      outs() << "type_hash: " << v.type_hash << ", renaming from " << vName;
+#endif
+      if (v.type_hash == typeid(FunctionDecl *).hash_code())
+        v.name = getName(vName, "abcdefghijklm", n_fn);
+      else if (v.type_hash == typeid(VarDecl *).hash_code()) {
+        v.name = getName(vName, "nopqrstuvwxyz", n_var);
+      } else if (v.type_hash == typeid(FieldDecl *).hash_code()) {
+        v.name = getName(vName, "nopqrstuvwxyz", n_fld);
+      } else if (v.type_hash == typeid(TypeDecl *).hash_code()) {
+        v.name = getName(vName, "ABCDEFGHIJKLMNOPQRSTUVWXYZ", n_type);
+      }
+#ifndef NDEBUG
+      outs() << " to " << v.name << "\n";
+#endif
     }
     tooling::Replacements reps;
     Renamer r(ctx, reps);
@@ -333,7 +360,8 @@ void reformat() {
 } // namespace
 
 int main(int argc, char *argv[]) {
-  std::vector<const char *> args{argv[0], "-fsyntax-only"};
+  std::vector<const char *> args{argv[0], "-fsyntax-only",
+                                 "-I/usr/lib/clang/17/include"};
   bool inplace = false;
   const char *outfile = "/dev/stdout";
   const char usage[] = R"(Usage: %s [-i] [-f fun]... a.c
