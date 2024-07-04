@@ -1,0 +1,48 @@
+#pragma once
+
+#include <clang/AST/ASTConsumer.h>
+#include <clang/AST/ASTContext.h>
+#include <clang/AST/Decl.h>
+#include <clang/AST/DeclBase.h>
+#include <clang/AST/DeclCXX.h>
+#include <clang/AST/ParentMap.h>
+#include <clang/AST/ParentMapContext.h>
+#include <clang/AST/RecursiveASTVisitor.h>
+#include <clang/AST/Stmt.h>
+#include <clang/AST/Type.h>
+#include <clang/AST/TypeLoc.h>
+#include <clang/Basic/FileManager.h>
+#include <clang/Basic/LLVM.h>
+#include <clang/Basic/LangOptions.h>
+#include <clang/Basic/SourceManager.h>
+#include <clang/Basic/TargetInfo.h>
+#include <clang/Driver/Action.h>
+#include <clang/Driver/Compilation.h>
+#include <clang/Driver/Driver.h>
+#include <clang/Driver/Tool.h>
+#include <clang/Format/Format.h>
+#include <clang/Frontend/CompilerInstance.h>
+#include <clang/Frontend/FrontendAction.h>
+#include <clang/Lex/Lexer.h>
+#include <clang/Lex/PreprocessorOptions.h>
+#include <clang/Tooling/Core/Replacement.h>
+#include <llvm/ADT/CachedHashString.h>
+#include <llvm/ADT/DenseSet.h>
+#include <llvm/ADT/MapVector.h>
+#include <llvm/ADT/STLExtras.h>
+#include <llvm/Support/Host.h>
+#include <llvm/Support/Path.h>
+
+using namespace clang;
+using namespace llvm;
+
+typedef struct {
+  std::string name;
+  size_t type_hash;
+  const CompoundStmt *c;
+} DeclMapData;
+
+typedef struct {
+  SmallVector<Decl *> d;
+  int id;
+} CompoundStmtMapData;
