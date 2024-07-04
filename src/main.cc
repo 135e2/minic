@@ -149,7 +149,19 @@ struct Collector : RecursiveASTVisitor<Collector> {
         // certainly of no use.
         d2name[td->getCanonicalDecl()].type_hash = typeid(td).hash_code();
     return true;
-  };
+  }
+  bool VisitEnumConstantDecl(EnumConstantDecl *ecd) {
+    used.insert(CachedHashStringRef(ecd->getName()));
+    if (!sm.isWrittenInMainFile(ecd->getLocation()))
+      return true;
+#ifndef NDEBUG
+    outs() << "in VisitEnumConstantDecl, typeid: " << typeid(ecd).name()
+           << "\n",
+#endif
+        d2name[ecd->getCanonicalDecl()].type_hash =
+            typeid(ecd->getCanonicalDecl()).hash_code();
+    return true;
+  }
 };
 
 struct Renamer : RecursiveASTVisitor<Renamer> {
@@ -220,7 +232,7 @@ struct Renamer : RecursiveASTVisitor<Renamer> {
   bool VisitDeclRefExpr(DeclRefExpr *dre) {
     Decl *d = dre->getDecl();
     if (!(isa<FunctionDecl>(d) || isa<VarDecl>(d) || isa<FieldDecl>(d) ||
-          isa<TypeDecl>(d))) {
+          isa<TypeDecl>(d) || isa<EnumConstantDecl>(d))) {
       return true;
     }
     auto it = d2name.find(d->getCanonicalDecl());
@@ -259,11 +271,18 @@ struct Renamer : RecursiveASTVisitor<Renamer> {
               it->second.name);
     return true;
   }
+  bool VisitEnumConstantDecl(EnumConstantDecl *ecd) {
+    auto *canon = ecd->getCanonicalDecl();
+    if (auto it = d2name.find(canon); it != d2name.end())
+      replace(CharSourceRange::getTokenRange(ecd->getLocation()),
+              it->second.name);
+    return true;
+  }
 };
 
 struct MiniASTConsumer : ASTConsumer {
   ASTContext *ctx;
-  int n_fn = 0, n_var = 0, n_fld = 0, n_type = 0;
+  int n_fn = 0, n_var = 0, n_fld = 0, n_type = 0, n_enumconst = 0;
 
   void Initialize(ASTContext &ctx) override { this->ctx = &ctx; }
   static std::string getName(StringRef origName, StringRef prefix, int &id) {
@@ -309,7 +328,9 @@ struct MiniASTConsumer : ASTConsumer {
       } else if (v.type_hash == typeid(FieldDecl *).hash_code()) {
         v.name = getName(vName, "nopqrstuvwxyz", n_fld);
       } else if (v.type_hash == typeid(TypeDecl *).hash_code()) {
-        v.name = getName(vName, "ABCDEFGHIJKLMNOPQRSTUVWXYZ", n_type);
+        v.name = getName(vName, "ABCDEFGHIJKLM", n_type);
+      } else if (v.type_hash == typeid(EnumConstantDecl *).hash_code()) {
+        v.name = getName(vName, "NOPQRSTUVWXYZ", n_enumconst);
       }
 #ifndef NDEBUG
       outs() << " to " << v.name << "\n";
