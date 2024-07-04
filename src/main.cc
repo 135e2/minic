@@ -6,12 +6,18 @@
  */
 
 #include <clang/AST/ASTConsumer.h>
+#include <clang/AST/ASTContext.h>
 #include <clang/AST/Decl.h>
+#include <clang/AST/DeclBase.h>
 #include <clang/AST/DeclCXX.h>
+#include <clang/AST/ParentMap.h>
+#include <clang/AST/ParentMapContext.h>
 #include <clang/AST/RecursiveASTVisitor.h>
+#include <clang/AST/Stmt.h>
 #include <clang/AST/Type.h>
 #include <clang/AST/TypeLoc.h>
 #include <clang/Basic/FileManager.h>
+#include <clang/Basic/LLVM.h>
 #include <clang/Basic/LangOptions.h>
 #include <clang/Basic/SourceManager.h>
 #include <clang/Basic/TargetInfo.h>
@@ -46,12 +52,20 @@ using namespace llvm;
 typedef struct {
   std::string name;
   size_t type_hash;
+  const CompoundStmt *c;
 } DeclMapData;
+
+typedef struct {
+  SmallVector<Decl *> d;
+  int id;
+} CompoundStmtMapData;
 
 SmallVector<StringRef, 0> ignores;
 MapVector<Decl *, DeclMapData> d2name;
+MapVector<const CompoundStmt *, CompoundStmtMapData> c2d;
 DenseSet<CachedHashStringRef> used;
 std::string newCode;
+int LocalIDMax;
 
 namespace {
 std::unique_ptr<CompilerInvocation>
@@ -85,8 +99,19 @@ buildCompilerInvocation(ArrayRef<const char *> args) {
 
 struct Collector : RecursiveASTVisitor<Collector> {
   SourceManager &sm;
+  ASTContext &ctx;
 
-  Collector(ASTContext &ctx) : sm(ctx.getSourceManager()) {}
+  Collector(ASTContext &ctx) : sm(ctx.getSourceManager()), ctx{ctx} {}
+
+  template <typename T1, typename T2> const T1 *getParent(const T2 &n) {
+    DynTypedNode dyn = DynTypedNode::create(n);
+    const auto &parents = ctx.getParents(dyn);
+    for (const auto &p : parents) {
+      if (const T1 *tp = p.get<T1>())
+        return tp;
+    }
+    return nullptr;
+  }
 
   bool VisitFunctionDecl(FunctionDecl *fd) {
     if (fd->isOverloadedOperator() || !fd->getIdentifier())
@@ -117,6 +142,58 @@ struct Collector : RecursiveASTVisitor<Collector> {
     if (kind != VarDecl::Definition ||
         !sm.isWrittenInMainFile(vd->getLocation()))
       return true;
+    /* If it's an local variable, lookup its parent twice.
+     * Function block level variable AST Chain:
+     * FunctionDecl-->CompoundStmt-->DeclStmt-->VarDecl
+     * example:
+     * void foo(void) {
+         int a = 0;
+     * }
+     *
+     * Local code block level variable AST Chain:
+     * Outer AST-->CompoundStmt-->CompoundStmt-->DeclStmt-->VarDecl
+     * example:
+     * void foo(void) {
+     *   // ...code...
+     *   {
+           int b = 0;
+     *   }
+     * }
+     *
+     * We insert its grandparent (CompoundStmt) into the bidirectional map.
+     */
+    if (vd->isLocalVarDecl()) {
+      const DeclStmt *ds = getParent<DeclStmt, VarDecl>(*vd);
+      if (ds) {
+        const CompoundStmt *cs = getParent<CompoundStmt, DeclStmt>(*ds);
+        if (cs) {
+          d2name[vd->getCanonicalDecl()].c = cs;
+          c2d[cs].d.push_back(vd->getCanonicalDecl());
+        }
+      }
+      /*
+       * For the ParmVar, the structure looks like this:
+       * FunctionDecl->CompoundStmt->DeclStmt->VarDecl
+       *             ->ParmVarDecl
+       * example:
+       * void foo(int a) {
+       *   int b;
+       * }
+       *
+       * Insert the CompoundStmt into map.
+       */
+    } else if (const ParmVarDecl *pvd = dynamic_cast<ParmVarDecl *>(vd)) {
+      if (const DeclContext *dc = pvd->getParentFunctionOrMethod();
+          dc->isFunctionOrMethod()) {
+        const FunctionDecl *fd = static_cast<const FunctionDecl *>(dc);
+        // fd->dumpColor();
+        if (const CompoundStmt *cs =
+                static_cast<const CompoundStmt *>(fd->getBody())) {
+          d2name[vd->getCanonicalDecl()].c = cs;
+          c2d[cs].d.push_back(vd->getCanonicalDecl());
+        }
+      }
+    }
 #ifndef NDEBUG
     outs() << "in VisitVarDecl, typeid: "
            << typeid(vd->getCanonicalDecl()).name() << "\n",
@@ -324,7 +401,12 @@ struct MiniASTConsumer : ASTConsumer {
       if (v.type_hash == typeid(FunctionDecl *).hash_code())
         v.name = getName(vName, "abcdefghijklm", n_fn);
       else if (v.type_hash == typeid(VarDecl *).hash_code()) {
-        v.name = getName(vName, "nopqrstuvwxyz", n_var);
+        if (auto it = c2d.find(v.c); it != c2d.end()) {
+          int &id = it->second.id;
+          v.name = getName(vName, "rstuvwxyz", id);
+        } else
+          // global variables, should not share w/ local
+          v.name = getName(vName, "nopq", n_var);
       } else if (v.type_hash == typeid(FieldDecl *).hash_code()) {
         v.name = getName(vName, "nopqrstuvwxyz", n_fld);
       } else if (v.type_hash == typeid(TypeDecl *).hash_code()) {
