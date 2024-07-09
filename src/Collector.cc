@@ -1,16 +1,5 @@
 #include "Collector.h"
 
-template <typename T1, typename T2>
-const T1 *Collector::getParent(const T2 &n) {
-  DynTypedNode dyn = DynTypedNode::create(n);
-  const auto &parents = ctx.getParents(dyn);
-  for (const auto &p : parents) {
-    if (const T1 *tp = p.get<T1>())
-      return tp;
-  }
-  return nullptr;
-}
-
 bool Collector::VisitFunctionDecl(FunctionDecl *fd) {
   if (fd->isOverloadedOperator() || !fd->getIdentifier())
     return true;

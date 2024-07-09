@@ -11,8 +11,10 @@ struct Collector : RecursiveASTVisitor<Collector> {
   SourceManager &sm;
   ASTContext &ctx;
 
-  Collector(ASTContext &ctx) : sm(ctx.getSourceManager()), ctx{ctx} {}
-  template <typename T1, typename T2> const T1 *getParent(const T2 &n);
+  Collector(ASTContext &ctx) : sm(ctx.getSourceManager()), ctx{ctx} {};
+  template <typename T1, typename T2> const T1 *getParent(const T2 &n) {
+    return ::getParent<T1, T2>(ctx, n);
+  }
   bool VisitFunctionDecl(FunctionDecl *fd);
   bool VisitVarDecl(VarDecl *vd);
   bool VisitFieldDecl(FieldDecl *fd);

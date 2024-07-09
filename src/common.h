@@ -5,6 +5,9 @@
 #include <clang/AST/Decl.h>
 #include <clang/AST/DeclBase.h>
 #include <clang/AST/DeclCXX.h>
+#include <clang/AST/DeclTemplate.h>
+#include <clang/AST/Expr.h>
+#include <clang/AST/ExprCXX.h>
 #include <clang/AST/ParentMap.h>
 #include <clang/AST/ParentMapContext.h>
 #include <clang/AST/RecursiveASTVisitor.h>
@@ -52,3 +55,19 @@ typedef struct {
   SmallVector<Decl *> d;
   int id;
 } CompoundStmtMapData;
+
+/*
+ * Retrive n's parent node in the ASTContext.
+ * Return a pointer to the first-found parent with type T1,
+ * otherwise a nullptr.
+ */
+template <typename T1, typename T2>
+const T1 *getParent(ASTContext &ctx, const T2 &n) {
+  DynTypedNode dyn = DynTypedNode::create(n);
+  const auto &parents = ctx.getParents(dyn);
+  for (auto &p : parents) {
+    if (auto *tp = p.get<T1>())
+      return tp;
+  }
+  return nullptr;
+}

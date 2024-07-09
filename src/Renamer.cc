@@ -37,15 +37,44 @@ bool Renamer::VisitCXXCtorInitializer(CXXCtorInitializer *cci) {
 }
 
 bool Renamer::VisitMemberExpr(MemberExpr *me) {
-  DeclarationNameInfo ni = me->getMemberNameInfo();
-  std::string name = ni.getAsString();
-  if (sm.isWrittenInMainFile(me->getMemberLoc())) {
-    auto *canon = me->getMemberDecl()->getCanonicalDecl();
-    auto it = d2name.find(canon);
-    if (it != d2name.end()) {
-      replace(CharSourceRange::getTokenRange(me->getMemberLoc()),
-              it->second.name);
+  if (!sm.isWrittenInMainFile(me->getExprLoc())) {
+    return true;
+  }
+
+  auto *md = me->getMemberDecl();
+
+  /* If its parent is a specialized class, obtain renaming info from its
+   * original template class.
+   * Matching the member name is not really an elegant solution,
+   * but we can barely learn anything from an unresolved template AST.
+   */
+  if (auto *ctsd =
+          getParent<ClassTemplateSpecializationDecl, decltype(*md)>(*md))
+    if (auto *td =
+            ctsd->getInstantiatedFrom().dyn_cast<ClassTemplateDecl *>()) {
+#ifndef NDEBUG
+      outs() << "\nFound parent is specialization.\n";
+#endif
+      auto *act_cd = td->getTemplatedDecl();
+      for (auto *d : act_cd->decls()) {
+        ValueDecl *act_md = dynamic_cast<ValueDecl *>(d);
+        if (!act_md)
+          continue;
+        if (IdentifierInfo *act_id = act_md->getIdentifier();
+            act_id == md->getIdentifier()) {
+#ifndef NDEBUG
+          outs() << "Found corresponding member:\n", act_md->dumpColor();
+#endif
+          md = act_md;
+          break;
+        }
+      }
     }
+
+  auto *canon = md->getCanonicalDecl();
+  auto it = d2name.find(canon);
+  if (it != d2name.end()) {
+    replace(CharSourceRange::getTokenRange(me->getExprLoc()), it->second.name);
   }
   return true;
 }
@@ -68,6 +97,23 @@ bool Renamer::VisitDeclRefExpr(DeclRefExpr *dre) {
   if (it != d2name.end())
     replace(CharSourceRange::getTokenRange(SourceRange(dre->getSourceRange())),
             it->second.name);
+
+  if (sm.isWrittenInMainFile(d->getLocation()))
+    if (FunctionDecl *fd = d->getAsFunction()) {
+      if (auto *tipfd = fd->getTemplateInstantiationPattern()) {
+        outs() << "In VisitDeclRefExpr, found Template func:\n",
+            tipfd->dumpColor();
+        if (auto it = d2name.find(tipfd->getCanonicalDecl());
+            it != d2name.end())
+          // only replace the function template name
+          replace(CharSourceRange::getTokenRange(
+                      SourceRange(dre->getBeginLoc(),
+                                  dre->getLAngleLoc().isValid()
+                                      ? dre->getLAngleLoc().getLocWithOffset(-1)
+                                      : dre->getEndLoc())),
+                  it->second.name);
+      }
+    }
   return true;
 }
 
@@ -87,16 +133,52 @@ bool Renamer::VisitTypeDecl(TypeDecl *d) {
 }
 
 bool Renamer::VisitTypeLoc(TypeLoc tl) {
+  if (!sm.isWrittenInMainFile(tl.getBeginLoc()))
+    return true;
+
   TypeDecl *td = nullptr;
   if (const TagTypeLoc ttl = tl.getAs<TagTypeLoc>())
-    td = ttl.getDecl()->getCanonicalDecl();
+    td = ttl.getDecl();
   if (const TypedefTypeLoc tdl = tl.getAs<TypedefTypeLoc>())
     td = tdl.getTypedefNameDecl()->getCanonicalDecl();
   if (const TemplateTypeParmTypeLoc ttptl = tl.getAs<TemplateTypeParmTypeLoc>())
     td = ttptl.getDecl();
+  if (const InjectedClassNameTypeLoc icntl =
+          tl.getAs<InjectedClassNameTypeLoc>())
+    td = icntl.getDecl();
+  if (const TemplateSpecializationTypeLoc tstl =
+          tl.getAs<TemplateSpecializationTypeLoc>()) {
+    auto *tst = tstl.getTypePtr();
+#ifndef NDEBUG
+    tst->dump(outs(), ctx);
+#endif
+    if (const RecordType *rt = tst->getAs<RecordType>()) {
+      if (!sm.isWrittenInMainFile(rt->getDecl()->getLocation()))
+        return true;
+
+      auto *ctsd =
+          dynamic_cast<ClassTemplateSpecializationDecl *>(rt->getDecl());
+      if (!ctsd)
+        return true;
+
+      auto *ctd = ctsd->getInstantiatedFrom().dyn_cast<ClassTemplateDecl *>();
+      if (!ctd)
+        return true;
+      if (auto it = d2name.find(ctd->getTemplatedDecl()); it != d2name.end()) {
+#ifndef NDEBUG
+        outs() << "Found underlying name: " << it->second.name << "\n\n";
+#endif
+        // We only need to replace its template name here (w/o template args).
+        replace(CharSourceRange::getTokenRange(tstl.getTemplateNameLoc()),
+                it->second.name);
+      }
+    }
+  }
+
   if (auto it = d2name.find(td); it != d2name.end())
     replace(CharSourceRange::getTokenRange(tl.getSourceRange()),
             it->second.name);
+
   return true;
 }
 
