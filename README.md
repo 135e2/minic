@@ -4,8 +4,10 @@ Yet another C minifier using Clang-AST and (annoyingly) regex magic.
 
 ## Roadmap
 - [ ] Support C++
-- [ ] Investigate deeper into clang AST. (currently variables in nested function params are not renamed)
-- [ ] Support minifying multiple source file
+  - [x] C++ function/class templates
+- [x] Investigate deeper into clang AST
+- [ ] Gradually replace regex with clang toolings
+- [ ] Support minifying multiple source files
 - [ ] Add rules to replace repetitive calls with macros
 
 ## Credits
