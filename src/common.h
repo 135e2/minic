@@ -30,7 +30,13 @@
 #include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/MapVector.h>
 #include <llvm/ADT/STLExtras.h>
+#include <llvm/Config/llvm-config.h>
+#include <llvm/Support/Casting.h>
+#if LLVM_VERSION_MAJOR >= 16
+#include <llvm/TargetParser/Host.h>
+#else
 #include <llvm/Support/Host.h>
+#endif
 #include <llvm/Support/Path.h>
 
 using namespace clang;

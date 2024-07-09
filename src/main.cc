@@ -15,7 +15,7 @@ DenseSet<CachedHashStringRef> used;
 std::string newCode;
 int LocalIDMax;
 
-namespace {
+namespace clang {
 std::unique_ptr<CompilerInvocation>
 buildCompilerInvocation(ArrayRef<const char *> args) {
   IntrusiveRefCntPtr<DiagnosticsEngine> diags(
@@ -109,7 +109,6 @@ struct MiniASTConsumer : ASTConsumer {
     tooling::Replacements reps;
     Renamer r(ctx, reps);
     r.TraverseDecl(ctx.getTranslationUnitDecl());
-
     auto &sm = ctx.getSourceManager();
     StringRef code = sm.getBufferData(sm.getMainFileID());
     auto res = tooling::applyAllReplacements(code, reps);
@@ -148,11 +147,11 @@ void reformat() {
          toString(res.takeError()).c_str());
   newCode = *res;
 }
-} // namespace
+} // namespace clang
 
 int main(int argc, char *argv[]) {
   std::vector<const char *> args{argv[0], "-fsyntax-only",
-                                 "-I/usr/lib/clang/17/include"};
+                                 "-I/usr/lib/clang/18/include"};
   bool inplace = false;
   const char *outfile = "/dev/stdout";
   const char usage[] = R"(Usage: %s [-i] [-f fun]... a.c
