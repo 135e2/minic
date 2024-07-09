@@ -1,45 +1,48 @@
 #include "Renamer.h"
 
 bool Renamer::VisitFunctionDecl(FunctionDecl *fd) {
+  if (!sm.isWrittenInMainFile(fd->getLocation()))
+    return true;
   auto *canon = fd->getCanonicalDecl();
-  auto it = d2name.find(canon);
-  if (it != d2name.end())
-    replace(CharSourceRange::getTokenRange(fd->getLocation()), it->second.name);
+  lookup(canon, [&](DeclMapData &dmd) {
+    replace(CharSourceRange::getTokenRange(fd->getLocation()), dmd.name);
+  });
   return true;
 }
 
 // CXXConstructorDecl is a special kind of FunctionDecl/CXXMethodDecl that
 // needs to be renamed to its parent class
 bool Renamer::VisitCXXConstructorDecl(CXXConstructorDecl *ccd) {
+  if (!sm.isWrittenInMainFile(ccd->getLocation()))
+    return true;
   // the canon decl should be the same as its class's (in other words,
   // its parent's)
   auto *canon = ccd->getParent()->getCanonicalDecl();
-  auto it = d2name.find(canon);
-  if (it != d2name.end()) {
-    replace(CharSourceRange::getTokenRange(ccd->getLocation()),
-            it->second.name);
+  lookup(canon, [&](DeclMapData &dmd) {
+    replace(CharSourceRange::getTokenRange(ccd->getLocation()), dmd.name);
     for (CXXCtorInitializer *cci : ccd->inits())
       VisitCXXCtorInitializer(cci);
     for (ParmVarDecl *param : ccd->parameters())
       VisitVarDecl(param);
-  }
+  });
+
   return true;
 }
 
 // And constructor leads to another oddity: C++ base/member initializer
 bool Renamer::VisitCXXCtorInitializer(CXXCtorInitializer *cci) {
+  if (!sm.isWrittenInMainFile(cci->getSourceLocation()))
+    return true;
   auto *canon = cci->getMember()->getCanonicalDecl();
-  auto it = d2name.find(canon);
-  if (it != d2name.end())
-    replace(CharSourceRange::getTokenRange(cci->getSourceLocation()),
-            it->second.name);
+  lookup(canon, [&](DeclMapData &dmd) {
+    replace(CharSourceRange::getTokenRange(cci->getSourceLocation()), dmd.name);
+  });
   return true;
 }
 
 bool Renamer::VisitMemberExpr(MemberExpr *me) {
-  if (!sm.isWrittenInMainFile(me->getExprLoc())) {
+  if (!sm.isWrittenInMainFile(me->getExprLoc()))
     return true;
-  }
 
   auto *md = me->getMemberDecl();
 
@@ -53,7 +56,7 @@ bool Renamer::VisitMemberExpr(MemberExpr *me) {
     if (auto *td =
             ctsd->getInstantiatedFrom().dyn_cast<ClassTemplateDecl *>()) {
 #ifndef NDEBUG
-      outs() << "\nFound parent is specialization.\n";
+      errs() << "\nFound parent is specialization.\n";
 #endif
       auto *act_cd = td->getTemplatedDecl();
       for (auto *d : act_cd->decls()) {
@@ -63,7 +66,7 @@ bool Renamer::VisitMemberExpr(MemberExpr *me) {
         if (IdentifierInfo *act_id = act_md->getIdentifier();
             act_id == md->getIdentifier()) {
 #ifndef NDEBUG
-          outs() << "Found corresponding member:\n", act_md->dumpColor();
+          errs() << "Found corresponding member:\n", act_md->dumpColor();
 #endif
           md = act_md;
           break;
@@ -72,63 +75,72 @@ bool Renamer::VisitMemberExpr(MemberExpr *me) {
     }
 
   auto *canon = md->getCanonicalDecl();
-  auto it = d2name.find(canon);
-  if (it != d2name.end()) {
-    replace(CharSourceRange::getTokenRange(me->getExprLoc()), it->second.name);
-  }
+  lookup(canon, [&](DeclMapData &dmd) {
+    replace(CharSourceRange::getTokenRange(me->getExprLoc()), dmd.name);
+  });
   return true;
 }
 
 bool Renamer::VisitVarDecl(VarDecl *vd) {
+  if (!sm.isWrittenInMainFile(vd->getLocation()))
+    return true;
   auto *canon = vd->getCanonicalDecl();
-  auto it = d2name.find(canon);
-  if (it != d2name.end())
-    replace(CharSourceRange::getTokenRange(vd->getLocation()), it->second.name);
+  lookup(canon, [&](DeclMapData &dmd) {
+    replace(CharSourceRange::getTokenRange(vd->getLocation()), dmd.name);
+  });
   return true;
 }
 
 bool Renamer::VisitDeclRefExpr(DeclRefExpr *dre) {
   Decl *d = dre->getDecl();
-  if (!(isa<FunctionDecl>(d) || isa<VarDecl>(d) || isa<FieldDecl>(d) ||
-        isa<TypeDecl>(d) || isa<EnumConstantDecl>(d))) {
+  if (!sm.isWrittenInMainFile(d->getLocation()))
     return true;
-  }
-  auto it = d2name.find(d->getCanonicalDecl());
-  if (it != d2name.end())
-    replace(CharSourceRange::getTokenRange(SourceRange(dre->getSourceRange())),
-            it->second.name);
+  if (!(isa<FunctionDecl>(d) || isa<VarDecl>(d) || isa<FieldDecl>(d) ||
+        isa<TypeDecl>(d) || isa<EnumConstantDecl>(d)))
+    return true;
+  auto *canon = d->getCanonicalDecl();
+  lookup(canon, [&](DeclMapData &dmd) {
+    replace(CharSourceRange::getTokenRange(dre->getSourceRange()), dmd.name);
+  });
 
-  if (sm.isWrittenInMainFile(d->getLocation()))
-    if (FunctionDecl *fd = d->getAsFunction()) {
-      if (auto *tipfd = fd->getTemplateInstantiationPattern()) {
-        outs() << "In VisitDeclRefExpr, found Template func:\n",
-            tipfd->dumpColor();
-        if (auto it = d2name.find(tipfd->getCanonicalDecl());
-            it != d2name.end())
-          // only replace the function template name
-          replace(CharSourceRange::getTokenRange(
-                      SourceRange(dre->getBeginLoc(),
-                                  dre->getLAngleLoc().isValid()
-                                      ? dre->getLAngleLoc().getLocWithOffset(-1)
-                                      : dre->getEndLoc())),
-                  it->second.name);
-      }
+  if (FunctionDecl *fd = d->getAsFunction()) {
+    if (auto *tipfd = fd->getTemplateInstantiationPattern()) {
+#ifndef NDEBUG
+      errs() << "\nIn VisitDeclRefExpr, found template func:\n",
+          tipfd->dumpColor();
+#endif
+      canon = tipfd->getCanonicalDecl();
+      lookup(canon, [&](DeclMapData &dmd) {
+        // only replace the function template name
+        replace(CharSourceRange::getTokenRange(
+                    SourceRange(dre->getBeginLoc(),
+                                dre->getLAngleLoc().isValid()
+                                    ? dre->getLAngleLoc().getLocWithOffset(-1)
+                                    : dre->getEndLoc())),
+                dmd.name);
+      });
     }
+  }
   return true;
 }
 
 bool Renamer::VisitFieldDecl(FieldDecl *fd) {
+  if (!sm.isWrittenInMainFile(fd->getLocation()))
+    return true;
   auto *canon = fd->getCanonicalDecl();
-  auto it = d2name.find(canon);
-  if (it != d2name.end())
-    replace(CharSourceRange::getTokenRange(fd->getLocation()), it->second.name);
+  lookup(canon, [&](DeclMapData &dmd) {
+    replace(CharSourceRange::getTokenRange(fd->getLocation()), dmd.name);
+  });
   return true;
 }
 
-bool Renamer::VisitTypeDecl(TypeDecl *d) {
-  auto *canon = d->getCanonicalDecl();
-  if (auto it = d2name.find(canon); it != d2name.end())
-    replace(CharSourceRange::getTokenRange(d->getLocation()), it->second.name);
+bool Renamer::VisitTypeDecl(TypeDecl *td) {
+  if (!sm.isWrittenInMainFile(td->getLocation()))
+    return true;
+  auto *canon = td->getCanonicalDecl();
+  lookup(canon, [&](DeclMapData &dmd) {
+    replace(CharSourceRange::getTokenRange(td->getLocation()), dmd.name);
+  });
   return true;
 }
 
@@ -150,7 +162,7 @@ bool Renamer::VisitTypeLoc(TypeLoc tl) {
           tl.getAs<TemplateSpecializationTypeLoc>()) {
     auto *tst = tstl.getTypePtr();
 #ifndef NDEBUG
-    tst->dump(outs(), ctx);
+    errs() << "\n", tst->dump(errs(), ctx);
 #endif
     if (const RecordType *rt = tst->getAs<RecordType>()) {
       if (!sm.isWrittenInMainFile(rt->getDecl()->getLocation()))
@@ -164,28 +176,30 @@ bool Renamer::VisitTypeLoc(TypeLoc tl) {
       auto *ctd = ctsd->getInstantiatedFrom().dyn_cast<ClassTemplateDecl *>();
       if (!ctd)
         return true;
-      if (auto it = d2name.find(ctd->getTemplatedDecl()); it != d2name.end()) {
+      lookup(ctd->getTemplatedDecl(), [&](DeclMapData &dmd) {
 #ifndef NDEBUG
-        outs() << "Found underlying name: " << it->second.name << "\n\n";
+        errs() << "Found underlying name: " << dmd.name << "\n";
 #endif
         // We only need to replace its template name here (w/o template args).
         replace(CharSourceRange::getTokenRange(tstl.getTemplateNameLoc()),
-                it->second.name);
-      }
+                dmd.name);
+      });
     }
   }
 
-  if (auto it = d2name.find(td); it != d2name.end())
-    replace(CharSourceRange::getTokenRange(tl.getSourceRange()),
-            it->second.name);
+  lookup(td, [&](DeclMapData &dmd) {
+    replace(CharSourceRange::getTokenRange(tl.getSourceRange()), dmd.name);
+  });
 
   return true;
 }
 
 bool Renamer::VisitEnumConstantDecl(EnumConstantDecl *ecd) {
+  if (!sm.isWrittenInMainFile(ecd->getLocation()))
+    return true;
   auto *canon = ecd->getCanonicalDecl();
-  if (auto it = d2name.find(canon); it != d2name.end())
-    replace(CharSourceRange::getTokenRange(ecd->getLocation()),
-            it->second.name);
+  lookup(canon, [&](DeclMapData &dmd) {
+    replace(CharSourceRange::getTokenRange(ecd->getLocation()), dmd.name);
+  });
   return true;
 }

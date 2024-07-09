@@ -10,8 +10,7 @@ bool Collector::VisitFunctionDecl(FunctionDecl *fd) {
   if (sm.isWrittenInMainFile(fd->getLocation())) {
     if (!is_contained(ignores, name))
 #ifndef NDEBUG
-
-      outs() << "in VisitFunctionDecl, typeid: "
+      errs() << "in VisitFunctionDecl, typeid: "
              << typeid(fd->getCanonicalDecl()).name() << "\n",
 #endif
           d2name[fd->getCanonicalDecl()].type_hash =
@@ -82,7 +81,7 @@ bool Collector::VisitVarDecl(VarDecl *vd) {
     }
   }
 #ifndef NDEBUG
-  outs() << "in VisitVarDecl, typeid: " << typeid(vd->getCanonicalDecl()).name()
+  errs() << "in VisitVarDecl, typeid: " << typeid(vd->getCanonicalDecl()).name()
          << "\n",
 #endif
       d2name[vd->getCanonicalDecl()].type_hash =
@@ -95,7 +94,7 @@ bool Collector::VisitFieldDecl(FieldDecl *fd) {
   if (!sm.isWrittenInMainFile(fd->getLocation()))
     return true;
 #ifndef NDEBUG
-  outs() << "in VisitFieldDecl, typeid: "
+  errs() << "in VisitFieldDecl, typeid: "
          << typeid(fd->getCanonicalDecl()).name() << "\n",
 #endif
       d2name[fd->getCanonicalDecl()].type_hash =
@@ -108,7 +107,7 @@ bool Collector::VisitTypeDecl(TypeDecl *td) {
   if (!sm.isWrittenInMainFile(td->getLocation()))
     return true;
 #ifndef NDEBUG
-  outs() << "in VisitTypeDecl, typeid: " << typeid(td).name() << "\n",
+  errs() << "in VisitTypeDecl, typeid: " << typeid(td).name() << "\n",
 #endif
       // TypeDecl does not have its own getCanonicalDecl method, so calling
       // td->getCanonicalDecl() would get its base class (Decl *)this and is
@@ -122,7 +121,7 @@ bool Collector::VisitEnumConstantDecl(EnumConstantDecl *ecd) {
   if (!sm.isWrittenInMainFile(ecd->getLocation()))
     return true;
 #ifndef NDEBUG
-  outs() << "in VisitEnumConstantDecl, typeid: " << typeid(ecd).name() << "\n",
+  errs() << "in VisitEnumConstantDecl, typeid: " << typeid(ecd).name() << "\n",
 #endif
       d2name[ecd->getCanonicalDecl()].type_hash =
           typeid(ecd->getCanonicalDecl()).hash_code();

@@ -1,5 +1,6 @@
 #include <err.h>
 #include <regex>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -27,7 +28,7 @@ static void removeComments(std::string &input) {
     input.replace(m, n + 2 - m, "");
   }
 
-  m = 0, n = 0;
+  n = 0;
 
   // ensure a newline to the end of the file to handle comments in the last line
   input.push_back('\n');

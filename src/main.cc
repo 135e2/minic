@@ -84,7 +84,7 @@ struct MiniASTConsumer : ASTConsumer {
       std::string vName =
           dynamic_cast<NamedDecl *>(d)->getDeclName().getAsString();
 #ifndef NDEBUG
-      outs() << "type_hash: " << v.type_hash << ", renaming from " << vName;
+      errs() << "type_hash: " << v.type_hash << ", renaming from " << vName;
 #endif
       if (v.type_hash == typeid(FunctionDecl *).hash_code())
         v.name = getName(vName, "abcdefghijklm", n_fn);
@@ -103,7 +103,7 @@ struct MiniASTConsumer : ASTConsumer {
         v.name = getName(vName, "NOPQRSTUVWXYZ", n_enumconst);
       }
 #ifndef NDEBUG
-      outs() << " to " << v.name << "\n";
+      errs() << " to " << v.name << "\n";
 #endif
     }
     tooling::Replacements reps;

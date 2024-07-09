@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common.h"
+#include <functional>
 
 extern MapVector<Decl *, DeclMapData> d2name;
 
@@ -16,6 +17,13 @@ struct Renamer : RecursiveASTVisitor<Renamer> {
   }
   template <typename T1, typename T2> const T1 *getParent(const T2 &n) {
     return ::getParent<T1, T2>(ctx, n);
+  }
+  // lookup Decl in the d2name map
+  bool lookup(Decl *d, std::function<void(DeclMapData &)> callback) {
+    bool found = false;
+    if (auto it = d2name.find(d); it != d2name.end())
+      callback(it->second), found = true;
+    return true;
   }
 
   bool VisitFunctionDecl(FunctionDecl *fd);
