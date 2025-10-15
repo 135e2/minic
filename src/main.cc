@@ -1,5 +1,6 @@
 #include <err.h>
 #include <memory>
+#include <sstream>
 #include <unistd.h>
 
 #include "Collector.h"
@@ -19,7 +20,12 @@ namespace clang {
 std::unique_ptr<CompilerInvocation>
 buildCompilerInvocation(ArrayRef<const char *> args) {
   IntrusiveRefCntPtr<DiagnosticsEngine> diags(
-      CompilerInstance::createDiagnostics(new DiagnosticOptions,
+#if LLVM_VERSION_MAJOR >= 20
+      CompilerInstance::createDiagnostics(*llvm::vfs::getRealFileSystem(),
+#else
+      CompilerInstance::createDiagnostics(
+#endif
+                                          new DiagnosticOptions,
                                           new IgnoringDiagConsumer, true));
 
   driver::Driver d(args[0], llvm::sys::getDefaultTargetTriple(), *diags,
@@ -150,8 +156,10 @@ void reformat() {
 } // namespace clang
 
 int main(int argc, char *argv[]) {
-  std::vector<const char *> args{argv[0], "-fsyntax-only",
-                                 "-I/usr/lib/clang/18/include"};
+  std::ostringstream clangVer;
+  clangVer << __clang_major__;
+  std::string includeArg = "-I/usr/lib/clang/" + clangVer.str() + "/include";
+  std::vector<const char *> args{argv[0], "-fsyntax-only", includeArg.c_str()};
   bool inplace = false;
   const char *outfile = "/dev/stdout";
   const char usage[] = R"(Usage: %s [-i] [-f fun]... a.c
@@ -192,7 +200,12 @@ Options:
       std::make_shared<PCHContainerOperations>());
   IgnoringDiagConsumer dc;
   inst->setInvocation(std::move(ci));
-  inst->createDiagnostics(&dc, false);
+#if LLVM_VERSION_MAJOR >= 20
+  inst->createDiagnostics(*llvm::vfs::getRealFileSystem(),
+#else
+  inst->createDiagnostics(
+#endif
+                          &dc, false);
   inst->getDiagnostics().setIgnoreAllWarnings(true);
   inst->setTarget(TargetInfo::CreateTargetInfo(
       inst->getDiagnostics(), inst->getInvocation().TargetOpts));
