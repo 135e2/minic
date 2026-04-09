@@ -149,15 +149,23 @@ bool Renamer::VisitTypeLoc(TypeLoc tl) {
     return true;
 
   TypeDecl *td = nullptr;
-  if (const TagTypeLoc ttl = tl.getAs<TagTypeLoc>())
+  SourceLocation loc;
+  if (const TagTypeLoc ttl = tl.getAs<TagTypeLoc>()) {
     td = ttl.getDecl();
-  if (const TypedefTypeLoc tdl = tl.getAs<TypedefTypeLoc>())
-    td = tdl.getTypedefNameDecl()->getCanonicalDecl();
-  if (const TemplateTypeParmTypeLoc ttptl = tl.getAs<TemplateTypeParmTypeLoc>())
+    loc = ttl.getNameLoc();
+  } else if (const TypedefTypeLoc tdl = tl.getAs<TypedefTypeLoc>()) {
+    td = tdl.getTypePtr()->getDecl()->getCanonicalDecl();
+    loc = tdl.getNameLoc();
+  } else if (const TemplateTypeParmTypeLoc ttptl =
+                 tl.getAs<TemplateTypeParmTypeLoc>()) {
     td = ttptl.getDecl();
-  if (const InjectedClassNameTypeLoc icntl =
-          tl.getAs<InjectedClassNameTypeLoc>())
+    loc = ttptl.getNameLoc();
+  } else if (const InjectedClassNameTypeLoc icntl =
+                 tl.getAs<InjectedClassNameTypeLoc>()) {
     td = icntl.getDecl();
+    loc = icntl.getNameLoc();
+  }
+
   if (const TemplateSpecializationTypeLoc tstl =
           tl.getAs<TemplateSpecializationTypeLoc>()) {
     auto *tst = tstl.getTypePtr();
@@ -188,7 +196,9 @@ bool Renamer::VisitTypeLoc(TypeLoc tl) {
   }
 
   lookup(td, [&](DeclMapData &dmd) {
-    replace(CharSourceRange::getTokenRange(tl.getSourceRange()), dmd.name);
+    replace(CharSourceRange::getTokenRange(loc.isValid() ? SourceRange(loc)
+                                                        : tl.getSourceRange()),
+            dmd.name);
   });
 
   return true;

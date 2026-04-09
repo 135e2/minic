@@ -3,10 +3,12 @@
 #include <sstream>
 #include <unistd.h>
 
+#include "common.h"
+
 #include "Collector.h"
 #include "Renamer.h"
-#include "common.h"
 #include "postProcess.h"
+#include "postProcessLexer.h"
 
 SmallVector<StringRef, 0> ignores;
 MapVector<Decl *, DeclMapData> d2name;
@@ -17,40 +19,6 @@ std::string newCode;
 int LocalIDMax;
 
 namespace clang {
-std::unique_ptr<CompilerInvocation>
-buildCompilerInvocation(ArrayRef<const char *> args) {
-  IntrusiveRefCntPtr<DiagnosticsEngine> diags(
-#if LLVM_VERSION_MAJOR >= 20
-      CompilerInstance::createDiagnostics(*llvm::vfs::getRealFileSystem(),
-#else
-      CompilerInstance::createDiagnostics(
-#endif
-                                          new DiagnosticOptions,
-                                          new IgnoringDiagConsumer, true));
-
-  driver::Driver d(args[0], llvm::sys::getDefaultTargetTriple(), *diags,
-                   "minic", llvm::vfs::getRealFileSystem());
-  d.setCheckInputsExist(false);
-  std::unique_ptr<driver::Compilation> comp(d.BuildCompilation(args));
-  if (!comp)
-    return nullptr;
-  const driver::JobList &jobs = comp->getJobs();
-  if (jobs.size() != 1 || !isa<driver::Command>(*jobs.begin()))
-    return nullptr;
-
-  const driver::Command &cmd = cast<driver::Command>(*jobs.begin());
-  if (StringRef(cmd.getCreator().getName()) != "clang")
-    return nullptr;
-  const llvm::opt::ArgStringList &cc_args = cmd.getArguments();
-  auto ci = std::make_unique<CompilerInvocation>();
-  if (!CompilerInvocation::CreateFromArgs(*ci, cc_args, *diags))
-    return nullptr;
-
-  ci->getDiagnosticOpts().IgnoreWarnings = true;
-  ci->getFrontendOpts().DisableFree = false;
-  return ci;
-}
-
 struct MiniASTConsumer : ASTConsumer {
   ASTContext *ctx;
   int n_fn = 0, n_var = 0, n_fld = 0, n_type = 0, n_enumconst = 0;
@@ -157,7 +125,7 @@ void reformat() {
 
 int main(int argc, char *argv[]) {
   std::ostringstream clangVer;
-  clangVer << __clang_major__;
+  clangVer << LLVM_VERSION_MAJOR;
   std::string includeArg = "-I/usr/lib/clang/" + clangVer.str() + "/include";
   std::vector<const char *> args{argv[0], "-fsyntax-only", includeArg.c_str()};
   bool inplace = false;
@@ -196,11 +164,16 @@ Options:
   if (!ci)
     errx(1, "failed to build CompilerInvocation");
 
+  IgnoringDiagConsumer dc;
+#if LLVM_VERSION_MAJOR >= 21
+  auto inst = std::make_unique<CompilerInstance>(
+      std::move(ci), std::make_shared<PCHContainerOperations>());
+#else
   auto inst = std::make_unique<CompilerInstance>(
       std::make_shared<PCHContainerOperations>());
-  IgnoringDiagConsumer dc;
   inst->setInvocation(std::move(ci));
-#if LLVM_VERSION_MAJOR >= 20
+#endif
+#if LLVM_VERSION_MAJOR == 21
   inst->createDiagnostics(*llvm::vfs::getRealFileSystem(),
 #else
   inst->createDiagnostics(
@@ -208,10 +181,14 @@ Options:
                           &dc, false);
   inst->getDiagnostics().setIgnoreAllWarnings(true);
   inst->setTarget(TargetInfo::CreateTargetInfo(
-      inst->getDiagnostics(), inst->getInvocation().TargetOpts));
+      inst->getDiagnostics(), inst->getInvocation().getTargetOpts()));
   if (!inst->hasTarget())
     errx(1, "hasTarget returns false");
-  inst->createFileManager(llvm::vfs::getRealFileSystem());
+  inst->createFileManager(
+#if LLVM_VERSION_MAJOR < 22
+      llvm::vfs::getRealFileSystem()
+#endif
+  );
   inst->setSourceManager(
       new SourceManager(inst->getDiagnostics(), inst->getFileManager(), true));
 
