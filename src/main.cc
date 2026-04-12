@@ -7,7 +7,6 @@
 
 #include "Collector.h"
 #include "Renamer.h"
-#include "postProcess.h"
 #include "postProcessLexer.h"
 
 SmallVector<StringRef, 0> ignores;
@@ -198,8 +197,9 @@ Options:
   if (Error e = action.Execute())
     errx(2, "failed to execute");
   action.EndSourceFile();
+
   reformat();
-  postProcess(newCode);
+  newCode = postProcessLexer::minify(newCode, args);
 
   std::error_code ec;
   raw_fd_ostream(inplace ? inst->getFrontendOpts().Inputs[0].getFile()
