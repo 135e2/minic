@@ -130,7 +130,8 @@ std::string postProcessLexer::minify(const std::string &code,
   Token lastToken;
   bool hasLastToken = false;
 
-  while (!L.LexFromRawLexer(token)) {
+  while (true) {
+    bool isDone = L.LexFromRawLexer(token);
     if (token.is(tok::eof))
       break;
 
@@ -145,8 +146,11 @@ std::string postProcessLexer::minify(const std::string &code,
            << "valid\n";
 
     // strip comments
-    if (token.is(tok::comment))
+    if (token.is(tok::comment)) {
+      if (isDone)
+        break;
       continue;
+    }
 
     // preserve \n for preprocessor directives
     if (token.isAtStartOfLine()) {
@@ -186,6 +190,8 @@ std::string postProcessLexer::minify(const std::string &code,
 
     lastToken = token;
     hasLastToken = true;
+    if (isDone)
+      break;
   }
 
   return output;
