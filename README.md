@@ -1,12 +1,12 @@
 # minic
 
-Yet another C minifier using Clang-AST and (annoyingly) regex magic.
+Yet another C minifier using Clang Lexer and Parser magic.
 
 ## Roadmap
 - [ ] Support C++
   - [x] C++ function/class templates
 - [x] Investigate deeper into clang AST
-- [ ] Gradually replace regex with clang toolings
+- [x] Gradually replace regex with clang toolings
 - [ ] Support minifying multiple source files
 - [ ] Add rules to replace repetitive calls with macros
 
