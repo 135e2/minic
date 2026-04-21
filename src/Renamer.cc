@@ -1,7 +1,8 @@
 #include "Renamer.h"
+#include "Utils.h"
 
 bool Renamer::VisitFunctionDecl(FunctionDecl *fd) {
-  if (!sm.isWrittenInMainFile(fd->getLocation()))
+  if (!isWrittenInMainFile(sm, fd->getLocation()))
     return true;
   auto *canon = fd->getCanonicalDecl();
   lookup(canon, [&](DeclMapData &dmd) {
@@ -13,7 +14,7 @@ bool Renamer::VisitFunctionDecl(FunctionDecl *fd) {
 // CXXConstructorDecl is a special kind of FunctionDecl/CXXMethodDecl that
 // needs to be renamed to its parent class
 bool Renamer::VisitCXXConstructorDecl(CXXConstructorDecl *ccd) {
-  if (!sm.isWrittenInMainFile(ccd->getLocation()))
+  if (!isWrittenInMainFile(sm, ccd->getLocation()))
     return true;
   // the canon decl should be the same as its class's (in other words,
   // its parent's)
@@ -31,7 +32,7 @@ bool Renamer::VisitCXXConstructorDecl(CXXConstructorDecl *ccd) {
 
 // And constructor leads to another oddity: C++ base/member initializer
 bool Renamer::VisitCXXCtorInitializer(CXXCtorInitializer *cci) {
-  if (!sm.isWrittenInMainFile(cci->getSourceLocation()))
+  if (!isWrittenInMainFile(sm, cci->getSourceLocation()))
     return true;
   auto *canon = cci->getMember()->getCanonicalDecl();
   lookup(canon, [&](DeclMapData &dmd) {
@@ -41,7 +42,7 @@ bool Renamer::VisitCXXCtorInitializer(CXXCtorInitializer *cci) {
 }
 
 bool Renamer::VisitMemberExpr(MemberExpr *me) {
-  if (!sm.isWrittenInMainFile(me->getExprLoc()))
+  if (!isWrittenInMainFile(sm, me->getExprLoc()))
     return true;
 
   auto *md = me->getMemberDecl();
@@ -82,7 +83,7 @@ bool Renamer::VisitMemberExpr(MemberExpr *me) {
 }
 
 bool Renamer::VisitVarDecl(VarDecl *vd) {
-  if (!sm.isWrittenInMainFile(vd->getLocation()))
+  if (!isWrittenInMainFile(sm, vd->getLocation()))
     return true;
   auto *canon = vd->getCanonicalDecl();
   lookup(canon, [&](DeclMapData &dmd) {
@@ -93,7 +94,7 @@ bool Renamer::VisitVarDecl(VarDecl *vd) {
 
 bool Renamer::VisitDeclRefExpr(DeclRefExpr *dre) {
   Decl *d = dre->getDecl();
-  if (!sm.isWrittenInMainFile(d->getLocation()))
+  if (!isWrittenInMainFile(sm, d->getLocation()))
     return true;
   if (!(isa<FunctionDecl>(d) || isa<VarDecl>(d) || isa<FieldDecl>(d) ||
         isa<TypeDecl>(d) || isa<EnumConstantDecl>(d)))
@@ -125,7 +126,7 @@ bool Renamer::VisitDeclRefExpr(DeclRefExpr *dre) {
 }
 
 bool Renamer::VisitFieldDecl(FieldDecl *fd) {
-  if (!sm.isWrittenInMainFile(fd->getLocation()))
+  if (!isWrittenInMainFile(sm, fd->getLocation()))
     return true;
   auto *canon = fd->getCanonicalDecl();
   lookup(canon, [&](DeclMapData &dmd) {
@@ -135,7 +136,7 @@ bool Renamer::VisitFieldDecl(FieldDecl *fd) {
 }
 
 bool Renamer::VisitTypeDecl(TypeDecl *td) {
-  if (!sm.isWrittenInMainFile(td->getLocation()))
+  if (!isWrittenInMainFile(sm, td->getLocation()))
     return true;
   auto *canon = td->getCanonicalDecl();
   lookup(canon, [&](DeclMapData &dmd) {
@@ -145,7 +146,7 @@ bool Renamer::VisitTypeDecl(TypeDecl *td) {
 }
 
 bool Renamer::VisitTypeLoc(TypeLoc tl) {
-  if (!sm.isWrittenInMainFile(tl.getBeginLoc()))
+  if (!isWrittenInMainFile(sm, tl.getBeginLoc()))
     return true;
 
   TypeDecl *td = nullptr;
@@ -173,7 +174,7 @@ bool Renamer::VisitTypeLoc(TypeLoc tl) {
     errs() << "\n", tst->dump(errs(), ctx);
 #endif
     if (const RecordType *rt = tst->getAs<RecordType>()) {
-      if (!sm.isWrittenInMainFile(rt->getDecl()->getLocation()))
+      if (!isWrittenInMainFile(sm, rt->getDecl()->getLocation()))
         return true;
 
       auto *ctsd =
@@ -197,7 +198,7 @@ bool Renamer::VisitTypeLoc(TypeLoc tl) {
 
   lookup(td, [&](DeclMapData &dmd) {
     replace(CharSourceRange::getTokenRange(loc.isValid() ? SourceRange(loc)
-                                                        : tl.getSourceRange()),
+                                                         : tl.getSourceRange()),
             dmd.name);
   });
 
@@ -205,7 +206,7 @@ bool Renamer::VisitTypeLoc(TypeLoc tl) {
 }
 
 bool Renamer::VisitEnumConstantDecl(EnumConstantDecl *ecd) {
-  if (!sm.isWrittenInMainFile(ecd->getLocation()))
+  if (!isWrittenInMainFile(sm, ecd->getLocation()))
     return true;
   auto *canon = ecd->getCanonicalDecl();
   lookup(canon, [&](DeclMapData &dmd) {

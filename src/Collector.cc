@@ -1,4 +1,5 @@
 #include "Collector.h"
+#include "Utils.h"
 
 bool Collector::VisitFunctionDecl(FunctionDecl *fd) {
   if (fd->isOverloadedOperator() || !fd->getIdentifier())
@@ -7,7 +8,7 @@ bool Collector::VisitFunctionDecl(FunctionDecl *fd) {
   if (!fd->isDefined())
     return true;
   std::string name = fd->getNameAsString();
-  if (sm.isWrittenInMainFile(fd->getLocation())) {
+  if (isWrittenInMainFile(sm, fd->getLocation())) {
     if (!is_contained(ignores, name))
 #ifndef NDEBUG
       errs() << "in VisitFunctionDecl, typeid: "
@@ -26,7 +27,8 @@ bool Collector::VisitVarDecl(VarDecl *vd) {
     return true;
   used.insert(CachedHashStringRef(vd->getName()));
   auto kind = vd->isThisDeclarationADefinition();
-  if (kind != VarDecl::Definition || !sm.isWrittenInMainFile(vd->getLocation()))
+  if (kind != VarDecl::Definition ||
+      !isWrittenInMainFile(sm, vd->getLocation()))
     return true;
   /* If it's an local variable, lookup its parent twice.
    * Function block level variable AST Chain:
@@ -91,7 +93,7 @@ bool Collector::VisitVarDecl(VarDecl *vd) {
 
 bool Collector::VisitFieldDecl(FieldDecl *fd) {
   used.insert(CachedHashStringRef(fd->getName()));
-  if (!sm.isWrittenInMainFile(fd->getLocation()))
+  if (!isWrittenInMainFile(sm, fd->getLocation()))
     return true;
 #ifndef NDEBUG
   errs() << "in VisitFieldDecl, typeid: "
@@ -104,7 +106,7 @@ bool Collector::VisitFieldDecl(FieldDecl *fd) {
 
 bool Collector::VisitTypeDecl(TypeDecl *td) {
   used.insert(CachedHashStringRef(td->getName()));
-  if (!sm.isWrittenInMainFile(td->getLocation()))
+  if (!isWrittenInMainFile(sm, td->getLocation()))
     return true;
 #ifndef NDEBUG
   errs() << "in VisitTypeDecl, typeid: " << typeid(td).name() << "\n",
@@ -118,7 +120,7 @@ bool Collector::VisitTypeDecl(TypeDecl *td) {
 
 bool Collector::VisitEnumConstantDecl(EnumConstantDecl *ecd) {
   used.insert(CachedHashStringRef(ecd->getName()));
-  if (!sm.isWrittenInMainFile(ecd->getLocation()))
+  if (!isWrittenInMainFile(sm, ecd->getLocation()))
     return true;
 #ifndef NDEBUG
   errs() << "in VisitEnumConstantDecl, typeid: " << typeid(ecd).name() << "\n",

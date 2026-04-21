@@ -39,5 +39,8 @@ buildCompilerInvocation(ArrayRef<const char *> args) {
   ci->getDiagnosticOpts().IgnoreWarnings = true;
   ci->getFrontendOpts().DisableFree = false;
   return ci;
-}
+};
+bool isWrittenInMainFile(SourceManager &sm, SourceLocation loc) {
+  return sm.isWrittenInMainFile(sm.getExpansionLoc(loc));
+};
 } // namespace clang
